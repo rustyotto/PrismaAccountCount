@@ -66,17 +66,23 @@ def list_all_accounts_recursively():
             cloud_type = account.get("cloudType")
             account_type = account.get("accountType") # e.g., ACCOUNT, ORGANIZATION
 
+            # --- DEBUGGING LINE ADDED ---
+            # This line prints the exact accountType value received from the API for each top-level entry.
+            print(f"  Processing top-level account: '{account_name}' | Raw Account Type from API: '{account_type}'")
+
             # Check if the account is an organization/tenant that may have children
-            # For AWS/GCP this is often 'ORGANIZATION', for Azure it might be 'TENANT'
-            is_organization = account_type in ["ORGANIZATION", "MASTER_SERVICE_ACCOUNT", "TENANT"]
+            # --- MODIFIED CHECK TO BE CASE-INSENSITIVE ---
+            # This handles cases where account_type might be None or a different case (e.g., 'organization').
+            is_organization = account_type and account_type.upper() in ["ORGANIZATION", "MASTER_SERVICE_ACCOUNT", "TENANT"]
 
             if is_organization:
-                print(f"  Found Organization Account: '{account_name}'. Discovering member accounts...")
+                print(f"  -> Identified as Organization Account. Discovering member accounts...")
                 # Add the parent organization itself to the list for completeness.
                 final_account_list.append({
                     "AccountID": account_id,
                     "AccountName": account_name,
                     "CloudType": cloud_type,
+                    "ReportAccountType": "Parent Organization", # New field for clarity
                     "ParentAccountName": "N/A (Is Parent)"
                 })
 
@@ -94,6 +100,7 @@ def list_all_accounts_recursively():
                             "AccountID": member.get("accountId"),
                             "AccountName": member.get("name"),
                             "CloudType": member.get("cloudType"),
+                            "ReportAccountType": "Member Account", # New field for clarity
                             "ParentAccountName": account_name # Add parent name for context
                         })
                 except requests.exceptions.HTTPError as errh:
@@ -101,17 +108,18 @@ def list_all_accounts_recursively():
                     # Add an error entry for the failed discovery
                     final_account_list.append({
                         "AccountID": "ERROR", "AccountName": f"Failed to list members for '{account_name}'",
-                        "CloudType": cloud_type, "ParentAccountName": account_name
+                        "CloudType": cloud_type, "ReportAccountType": "Error", "ParentAccountName": account_name
                     })
                 except Exception as e:
                     print(f"    -> An unexpected error discovering members for '{account_name}': {e}")
 
             else: # This is a standard, non-organizational account
-                print(f"  Found Standard Account: '{account_name}'.")
+                print(f"  -> Identified as Standalone Account.")
                 final_account_list.append({
                     "AccountID": account_id,
                     "AccountName": account_name,
                     "CloudType": cloud_type,
+                    "ReportAccountType": "Standalone Account", # New field for clarity
                     "ParentAccountName": "N/A (Directly Onboarded)"
                 })
 
@@ -145,8 +153,12 @@ def main():
         # --- 2. Calculate Count by Cloud Type ---
         cloud_types = [acc.get("CloudType", "Unknown") for acc in all_accounts]
         count_by_type = Counter(cloud_types)
+
+        # --- 3. Calculate Count by Account Type (New Summary) ---
+        account_types = [acc.get("ReportAccountType", "Unknown") for acc in all_accounts]
+        count_by_account_type = Counter(account_types)
         
-        # --- 3. Generate CSV Output ---
+        # --- 4. Generate CSV Output ---
         output_filename = "prisma_cloud_account_inventory.csv"
         print(f"\n--- Writing Account Inventory Report to {output_filename} ---")
         
@@ -165,10 +177,17 @@ def main():
                     writer.writerow([cloud_type, count])
                 writer.writerow([]) # Blank line separator
 
+                # Write new summary section for account types
+                writer.writerow(["Account Count by Role"])
+                writer.writerow(["Account Type", "Count"])
+                for acc_type, count in count_by_account_type.items():
+                    writer.writerow([acc_type, count])
+                writer.writerow([]) # Blank line separator
+
                 # Write the full list of accounts
                 writer.writerow(["Full Account List"])
-                # Define the header for the detailed list
-                detailed_header = ["AccountID", "AccountName", "CloudType", "ParentAccountName"]
+                # Define the header for the detailed list, including the new AccountType column
+                detailed_header = ["AccountID", "AccountName", "CloudType", "AccountType", "ParentAccountName"]
                 writer.writerow(detailed_header)
                 
                 # Write the account data
@@ -177,11 +196,12 @@ def main():
                         account.get("AccountID"),
                         account.get("AccountName"),
                         account.get("CloudType"),
+                        account.get("ReportAccountType"), # New column added
                         account.get("ParentAccountName")
                     ])
             
             print(f"Report successfully written to {output_filename}")
-            print(f"Summary: Total Accounts = {total_count}, Breakdown by Type = {dict(count_by_type)}")
+            print(f"Summary: Total Accounts = {total_count}, Breakdown by Cloud = {dict(count_by_type)}, Breakdown by Role = {dict(count_by_account_type)}")
 
         except IOError as e:
             print(f"IOError writing report to {output_filename}. Check permissions or path. Error: {e}")
